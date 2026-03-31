@@ -54,8 +54,21 @@ jobs:
           fi
 
           for INSTANCE_URL in $INSTANCES; do
-            VM_NAME=$(echo "$INSTANCE_URL" | awk -F/ '{print $NF}')
-            VM_ZONE=$(echo "$INSTANCE_URL" | awk -F/ '{print $(NF-2)}')
+            VM_NAME=$(basename "$INSTANCE_URL")
+            if [[ "$INSTANCE_URL" == *"/zones/"* ]]; then
+              VM_ZONE=$(echo "$INSTANCE_URL" | awk -F/ '{print $(NF-2)}')
+            else
+              VM_ZONE=$(gcloud compute instances list \
+                --project "$PROJECT_ID" \
+                --filter="name=($VM_NAME)" \
+                --format="value(zone.basename())" \
+                | head -n1)
+            fi
+
+            if [[ -z "$VM_ZONE" ]]; then
+              echo "Failed to resolve zone for instance: $VM_NAME"
+              exit 1
+            fi
 
             echo "Deploying platform to $VM_NAME ($VM_ZONE)"
 
