@@ -46,18 +46,20 @@ jobs:
           INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
             --region "$REGION" \
             --project "$PROJECT_ID" \
-            --format="value(instance)")
+            --format="value(instance,zone)")
 
           if [[ -z "$INSTANCES" ]]; then
             echo "No instances found in MIG: $MIG_NAME"
             exit 1
           fi
 
-          for INSTANCE_URL in $INSTANCES; do
-            VM_NAME=$(basename "$INSTANCE_URL")
-            if [[ "$INSTANCE_URL" == *"/zones/"* ]]; then
-              VM_ZONE=$(echo "$INSTANCE_URL" | awk -F/ '{print $(NF-2)}')
-            else
+          while read -r INSTANCE_REF INSTANCE_ZONE; do
+            [[ -z "$INSTANCE_REF" ]] && continue
+
+            VM_NAME=$(basename "$INSTANCE_REF")
+            VM_ZONE=$(basename "$INSTANCE_ZONE")
+
+            if [[ -z "$VM_ZONE" ]]; then
               VM_ZONE=$(gcloud compute instances list \
                 --project "$PROJECT_ID" \
                 --filter="name=($VM_NAME)" \
@@ -127,6 +129,6 @@ jobs:
             pm2 restart service-registry api-gateway --update-env
             pm2 save
           SCRIPT
-          done
+          done <<< "$INSTANCES"
 
     
