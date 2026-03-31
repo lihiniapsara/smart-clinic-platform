@@ -5,9 +5,15 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    steps:
-      - name: First Step Of Deployment Workflow
-        run: echo "This is the first step of the workflow."
 
-      - name: Second Step Of Deployment Workflow
-        run: echo "Finalizing the deployment workflow."
+    permissions:
+        contents: read
+        id-token: write        
+
+    steps:
+      - name: Authenticate to Google Cloud  
+        uses: google-github-actions/auth@v1
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
