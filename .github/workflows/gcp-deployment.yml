@@ -1,19 +1,33 @@
-name: Smart Clinic Project Platform GCP Deployment
+name: Deploy Platform to GCP
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   deploy:
+    name: Build and Deploy Platform
     runs-on: ubuntu-latest
+
+    env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      REGION: us-central1
+      MIG_NAME: smartclinic-platform-mig
+      VM_USER: gcp-deploy
+      APP_DIR: /home/gcp-deploy/smart-clinic-platform
+      REPO_URL: https://github.com/${{ github.repository }}.git
+      CONFIG_SERVER_URIS: http://config.platform:9000
+      EUREKA_SERVER_URLS: http://vm-node-a.platform:9001/eureka/,http://vm-node-b.platform:9001/eureka/,http://vm-node-c.platform:9001/eureka/
 
     permissions:
       contents: read
       id-token: write
 
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -21,5 +35,85 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           project_id: ${{ secrets.GCP_PROJECT_ID }}
 
-      - name: Set up gcloud Cloud SDK environment
-        uses: google-github-actions/setup-gcloud@v3.0.1  
+      - name: Set up gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to each platform VM in MIG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --format="value(instance)")
+
+          if [[ -z "$INSTANCES" ]]; then
+            echo "No instances found in MIG: $MIG_NAME"
+            exit 1
+          fi
+
+          for INSTANCE_URL in $INSTANCES; do
+            VM_NAME=$(echo "$INSTANCE_URL" | awk -F/ '{print $NF}')
+            VM_ZONE=$(echo "$INSTANCE_URL" | awk -F/ '{print $(NF-2)}')
+
+            echo "Deploying platform to $VM_NAME ($VM_ZONE)"
+
+            gcloud compute ssh "$VM_USER@$VM_NAME" \
+              --project "$PROJECT_ID" \
+              --zone "$VM_ZONE" \
+              --command "export APP_DIR='$APP_DIR' REPO_URL='$REPO_URL' CONFIG_SERVER_URIS='$CONFIG_SERVER_URIS' EUREKA_SERVER_URLS='$EUREKA_SERVER_URLS' CURRENT_ZONE='$VM_ZONE'; bash -s" <<'SCRIPT'
+            set -euo pipefail
+
+            if [[ ! -d "$APP_DIR/.git" ]]; then
+              git clone "$REPO_URL" "$APP_DIR"
+            else
+              git -C "$APP_DIR" fetch origin main
+              git -C "$APP_DIR" reset --hard origin/main
+            fi
+
+            git -C "$APP_DIR" submodule sync --recursive || true
+            git -C "$APP_DIR" submodule update --init --recursive
+
+            cd "$APP_DIR"
+            mkdir -p logs
+
+            chmod +x config-server/mvnw service-registry/mvnw api-gateway/mvnw
+            (cd config-server && ./mvnw clean package -DskipTests)
+            (cd service-registry && ./mvnw clean package -DskipTests)
+            (cd api-gateway && ./mvnw clean package -DskipTests)
+
+            case "$CURRENT_ZONE" in
+              *-a) VMID="vm-node-a.platform" ;;
+              *-b) VMID="vm-node-b.platform" ;;
+              *-c) VMID="vm-node-c.platform" ;;
+              *) VMID="${HOSTNAME:-vm-node-a.platform}" ;;
+            esac
+
+            export VMID CONFIG_SERVER_URIS EUREKA_SERVER_URLS
+
+            pm2 delete config-server service-registry api-gateway >/dev/null 2>&1 || true
+            pm2 start ecosystem.config.js --only config-server --update-env
+
+            READY=false
+            for i in {1..45}; do
+              if curl -fsS http://localhost:9000/actuator/health >/dev/null 2>&1; then
+                READY=true
+                break
+              fi
+              sleep 2
+            done
+
+            if [[ "$READY" != true ]]; then
+              echo "Config server health check timed out on $HOSTNAME"
+              exit 1
+            fi
+
+            pm2 start ecosystem.config.js --only service-registry --update-env
+            pm2 start ecosystem.config.js --only api-gateway --update-env
+            pm2 restart service-registry api-gateway --update-env
+            pm2 save
+SCRIPT
+          done
+
+    
