@@ -43,29 +43,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          INSTANCES=$(gcloud compute instance-groups managed list-instances "$MIG_NAME" \
-            --region "$REGION" \
+          INSTANCES=$(gcloud compute instances list \
             --project "$PROJECT_ID" \
-            --format="value(instance,zone)")
+            --filter="name~'^${MIG_NAME}-'" \
+            --format="value(name,zone.basename())")
 
           if [[ -z "$INSTANCES" ]]; then
             echo "No instances found in MIG: $MIG_NAME"
             exit 1
           fi
 
-          while read -r INSTANCE_REF INSTANCE_ZONE; do
-            [[ -z "$INSTANCE_REF" ]] && continue
-
-            VM_NAME=$(basename "$INSTANCE_REF")
-            VM_ZONE=$(basename "$INSTANCE_ZONE")
-
-            if [[ -z "$VM_ZONE" ]]; then
-              VM_ZONE=$(gcloud compute instances list \
-                --project "$PROJECT_ID" \
-                --filter="name=($VM_NAME)" \
-                --format="value(zone.basename())" \
-                | head -n1)
-            fi
+          while read -r VM_NAME VM_ZONE; do
+            [[ -z "$VM_NAME" ]] && continue
 
             if [[ -z "$VM_ZONE" ]]; then
               echo "Failed to resolve zone for instance: $VM_NAME"
