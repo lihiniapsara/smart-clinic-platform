@@ -1,0 +1,13 @@
+name: Smart Clinic Project Platform GCP Deployment
+on:
+  push:
+ 
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: First Step Of Deployment Workflow
+        run: echo "This is the first step of the workflow."
+
+      - name: Second Step Of Deployment Workflow
+        run: echo "Finalizing the deployment workflow."
